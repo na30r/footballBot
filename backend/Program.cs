@@ -3,11 +3,13 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.FileProviders;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
 builder.Services.AddMemoryCache();
+builder.Services.AddSingleton(new ResultStore(builder.Configuration["Postgres:ConnectionString"]));
 builder.Services.AddHttpClient("sportscore", client =>
 {
     client.BaseAddress = new Uri("https://sportscore.com/");
@@ -107,6 +109,52 @@ app.MapPost("/api/telegram", async (
     return result.Sent > 0
         ? Results.Ok(new { sent = true, count = result.Sent })
         : Results.Ok(new { sent = false, count = 0 });
+});
+
+app.MapGet("/api/days", async (ResultStore store, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await store.Days(cancellationToken));
+    }
+    catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+    {
+        return Results.Json(
+            new { error = "The results database is unavailable." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+
+app.MapGet("/api/range", async (string? league, string? date, int? from, ResultStore store, CancellationToken cancellationToken) =>
+{
+    if (!DateOnly.TryParse(date, out var playedOn))
+        return Results.BadRequest(new { error = "Pick a day." });
+
+    var start = Math.Clamp(from ?? 29, 0, 45);
+    try
+    {
+        return Results.Ok(await store.Range(league, playedOn, start, cancellationToken));
+    }
+    catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+    {
+        return Results.Json(
+            new { error = "The results database is unavailable." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+});
+
+app.MapGet("/api/conditions", async (ResultStore store, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return Results.Ok(await store.Report(cancellationToken));
+    }
+    catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+    {
+        return Results.Json(
+            new { error = "The results database is unavailable." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 });
 
 app.MapGet("/api/match/{slug}", async (
@@ -244,6 +292,7 @@ static async Task WatchTwentyFifthMinute(IServiceProvider services, Cancellation
     var cache = services.GetRequiredService<IMemoryCache>();
     var config = services.GetRequiredService<IConfiguration>();
     var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Minute25");
+    var results = services.GetRequiredService<ResultStore>();
     var path = Path.Combine(services.GetRequiredService<IHostEnvironment>().ContentRootPath, "notified-25.json");
     var notified = LoadNotified(path);
 
@@ -255,6 +304,7 @@ static async Task WatchTwentyFifthMinute(IServiceProvider services, Cancellation
             var feed = await LoadMatchFeed(http, cache, stopping);
             if (feed is not null)
             {
+                await RecordFinishedConditions(feed, http, cache, results, logger, stopping);
                 var result = await NotifyTwentyFifthMinute(feed, http, cache, config, notified, logger, stopping);
                 if (result.Changed)
                     SaveNotified(path, notified);
@@ -272,6 +322,62 @@ static async Task WatchTwentyFifthMinute(IServiceProvider services, Cancellation
         {
             break;
         }
+    }
+}
+
+static async Task RecordFinishedConditions(
+    MatchFeed feed,
+    IHttpClientFactory httpFactory,
+    IMemoryCache cache,
+    ResultStore results,
+    ILogger logger,
+    CancellationToken cancellationToken)
+{
+    if (!results.Enabled)
+        return;
+
+    try
+    {
+        var known = await results.LoadKnownSlugs(cancellationToken);
+        foreach (var match in feed.Matches)
+        {
+            if (!ResultStore.IsFinished(match.Status) || string.IsNullOrWhiteSpace(match.Slug) || known.Contains(match.Slug))
+                continue;
+
+            try
+            {
+                var detail = await LoadMatchDetail(match.Slug, httpFactory, cache, cancellationToken);
+                if (detail is null || !ResultStore.IsFinished(detail.Status))
+                    continue;
+
+                var marks = ConditionScore.Goals(detail);
+                var halfTimeGoals = ConditionScore.HalfTimeTotal(detail);
+                var (goals, outcome) = ConditionScore.InWindow(30, halfTimeGoals, marks);
+                await results.Save(
+                    match,
+                    ConditionScore.PlayedOn(match.Kickoff),
+                    goals,
+                    outcome,
+                    halfTimeGoals,
+                    marks,
+                    cancellationToken);
+                known.Add(match.Slug);
+                logger.LogInformation(
+                    "Recorded {Outcome} for {Home} vs {Away}: {Goals} goal(s) from 30' to half-time",
+                    outcome,
+                    match.Home,
+                    match.Away,
+                    goals);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Could not record {Home} vs {Away}", match.Home, match.Away);
+            }
+        }
+    }
+    catch (Exception ex) when (ex is NpgsqlException or TimeoutException)
+    {
+        logger.LogWarning(ex, "Could not record finished-match conditions");
     }
 }
 

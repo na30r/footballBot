@@ -1,3 +1,97 @@
+.nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.nav a {
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 12px;
+}
+
+.nav a.active {
+  color: #17200f;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+
+.pickers label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pickers select,
+.pickers input {
+  min-width: 11rem;
+  border: 1px solid var(--line);
+  background: #10170f;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.tally {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.tally div {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.tally strong {
+  display: block;
+  font-size: 1.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tally .win {
+  color: var(--accent);
+}
+
+.tally .lose {
+  color: var(--live);
+}
+
+.tally .draw {
+  color: var(--upcoming);
+}
+
+.tally span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.goal-minutes {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .page {
   width: min(760px, calc(100% - 32px));
   margin: 0 auto;
@@ -72,6 +166,95 @@ footer {
   text-align: right;
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.condition {
+  margin-bottom: 22px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+}
+
+.condition-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: -0.03em;
+}
+
+.condition-head p,
+.detail-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.condition table {
+  width: 100%;
+  margin-top: 14px;
+  border-collapse: collapse;
+}
+
+.condition th,
+.condition td {
+  padding: 8px 0;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.condition th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.condition td:not(:first-child),
+.condition th:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.condition .win {
+  color: var(--accent);
+}
+
+.condition .lose {
+  color: var(--live);
+}
+
+.condition .draw {
+  color: var(--upcoming);
+}
+
+.condition-result {
+  margin: 10px 0 0;
+  text-align: center;
+}
+
+.condition-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.condition-pill.win {
+  color: var(--accent);
+  background: #2c3a14;
+}
+
+.condition-pill.draw {
+  color: var(--upcoming);
+  background: #3a3118;
+}
+
+.condition-pill.lose {
+  color: var(--live);
+  background: #3a221c;
 }
 
 .filters {
