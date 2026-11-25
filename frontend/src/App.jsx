@@ -58,6 +58,13 @@ function formatDay(isoDate) {
   }).format(new Date(year, month - 1, day));
 }
 
+function dayHeading(isoDate) {
+  const label = formatDay(isoDate);
+  if (!label || label === isoDate) return isoDate || "Time unknown";
+  if (isoDate === playedOn(new Date().toISOString())) return `Today · ${label}`;
+  return label;
+}
+
 function playedOn(kickoff) {
   if (!kickoff) return "";
   const date = new Date(kickoff);
@@ -516,12 +523,29 @@ function Board() {
     return tally;
   }, [inLeague]);
 
+  const statusFilter = sort === "upcoming" ? "upcoming" : filter;
+
   const visible = useMemo(() => {
-    const list = filter === "all" ? inLeague : inLeague.filter((match) => bucket(match.status) === filter);
+    const list = statusFilter === "all" ? inLeague : inLeague.filter((match) => bucket(match.status) === statusFilter);
     return [...list].sort((a, b) => new Date(a.kickoff || 0) - new Date(b.kickoff || 0));
-  }, [inLeague, filter]);
+  }, [inLeague, statusFilter]);
 
   const grouped = useMemo(() => {
+    if (sort === "upcoming") {
+      const buckets = new Map();
+      for (const match of visible) {
+        const id = playedOn(match.kickoff) || "unknown";
+        if (!buckets.has(id)) buckets.set(id, []);
+        buckets.get(id).push(match);
+      }
+      return [...buckets.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, list]) => ({
+          id,
+          label: id === "unknown" ? "Time unknown" : dayHeading(id),
+          matches: list,
+        }));
+    }
     if (sort === "time") return [{ id: "time", label: "", matches: visible }];
     const buckets = new Map();
     for (const match of visible) {
@@ -548,6 +572,28 @@ function Board() {
     setDay((current) => (current === date ? null : date));
     setFilter("all");
     setLeague("all");
+    setSort((current) => (current === "upcoming" ? "league" : current));
+  }
+
+  function showUpcoming() {
+    setSort("upcoming");
+    setFilter("upcoming");
+    setDay(null);
+    setLeague("all");
+  }
+
+  function leaveUpcoming(next) {
+    setSort(next);
+    if (sort === "upcoming") setFilter("all");
+  }
+
+  function setStatus(id) {
+    setFilter(id);
+    setSort((current) => {
+      if (id === "upcoming") return "upcoming";
+      if (current === "upcoming") return "league";
+      return current;
+    });
   }
 
   return (
@@ -577,8 +623,8 @@ function Board() {
           {FILTERS.map((item) => (
             <button
               key={item.id}
-              className={filter === item.id ? "chip active" : "chip"}
-              onClick={() => setFilter(item.id)}
+              className={statusFilter === item.id ? "chip active" : "chip"}
+              onClick={() => setStatus(item.id)}
               type="button"
             >
               {item.label}
@@ -604,18 +650,21 @@ function Board() {
       <section className="pitch">
         <header className="pitch-head">
           <div>
-            <p className="eyebrow">{day ? "Games that day" : "Match board"}</p>
-            <h1>{day ? formatDay(day) : "Match desk"}</h1>
+            <p className="eyebrow">{day ? "Games that day" : sort === "upcoming" ? "Not started" : "Match board"}</p>
+            <h1>{day ? formatDay(day) : sort === "upcoming" ? "Upcoming" : "Match desk"}</h1>
             {day && (
               <button className="day-clear" type="button" onClick={() => setDay(null)}>
                 All days
               </button>
             )}
             <div className="sorts">
-              <button className={sort === "league" ? "chip active" : "chip"} type="button" onClick={() => setSort("league")}>
+              <button className={sort === "upcoming" ? "chip active" : "chip"} type="button" onClick={showUpcoming}>
+                Upcoming
+              </button>
+              <button className={sort === "league" ? "chip active" : "chip"} type="button" onClick={() => leaveUpcoming("league")}>
                 By league
               </button>
-              <button className={sort === "time" ? "chip active" : "chip"} type="button" onClick={() => setSort("time")}>
+              <button className={sort === "time" ? "chip active" : "chip"} type="button" onClick={() => leaveUpcoming("time")}>
                 By time
               </button>
               <button className={layout === "cards" ? "chip active" : "chip"} type="button" onClick={() => setLayout("cards")}>
@@ -659,7 +708,13 @@ function Board() {
         {day && dayGames === null && !dayError && <p className="empty">Loading this day…</p>}
 
         {!error && !dayError && !(day && dayGames === null) && !loading && visible.length === 0 && (
-          <p className="empty">{day ? `No matches on ${formatDay(day)}.` : "No matches in this view right now."}</p>
+          <p className="empty">
+            {sort === "upcoming"
+              ? "No upcoming matches."
+              : day
+                ? `No matches on ${formatDay(day)}.`
+                : "No matches in this view right now."}
+          </p>
         )}
 
         {grouped.map((section) => (
