@@ -227,7 +227,7 @@ static async Task<MatchFeed?> LoadMatchFeed(
     var client = httpFactory.CreateClient("sportscore");
     var today = DateTime.UtcNow.Date;
     var requests = TopLeagues.All.SelectMany(league =>
-        Enumerable.Range(-1, 4).Select(offset =>
+        Enumerable.Range(-1, 5).Select(offset =>
             FetchLeagueDay(client, league, today.AddDays(offset), cancellationToken)));
 
     var results = await Task.WhenAll(requests);
@@ -696,6 +696,9 @@ static class TopLeagues
         new("serie-a", "Serie A", "italian-serie-a"),
         new("bundesliga", "Bundesliga", "bundesliga"),
         new("la-liga", "La Liga", "spanish-la-liga"),
+        new("champions-league", "Champions League", "uefa-champions-league"),
+        new("europa-league", "Europa League", "uefa-europa-league"),
+        new("afc-champions-league", "AFC Champions League Elite", "afc-champions-league-elite"),
     ];
 }
 

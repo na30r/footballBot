@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 const LEAGUES = [
@@ -7,6 +7,9 @@ const LEAGUES = [
   { id: "serie-a", label: "Serie A" },
   { id: "bundesliga", label: "Bundesliga" },
   { id: "la-liga", label: "La Liga" },
+  { id: "champions-league", label: "Champions League" },
+  { id: "europa-league", label: "Europa League" },
+  { id: "afc-champions-league", label: "AFC Champions League Elite" },
 ];
 
 const FILTERS = [
@@ -55,6 +58,37 @@ function formatDay(isoDate) {
   }).format(new Date(year, month - 1, day));
 }
 
+function playedOn(kickoff) {
+  if (!kickoff) return "";
+  const date = new Date(kickoff);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function storedCard(match) {
+  const league = LEAGUES.find((item) => item.label === match.league);
+  return {
+    slug: match.slug,
+    leagueId: league?.id ?? "",
+    home: match.home,
+    away: match.away,
+    homeLogo: null,
+    awayLogo: null,
+    homeScore: match.homeScore,
+    awayScore: match.awayScore,
+    status: "finished",
+    statusText: "Finished",
+    kickoff: null,
+    competition: match.league,
+    competitionLogo: null,
+  };
+}
+
 function outcomeLabel(outcome) {
   if (outcome === "win") return "Win";
   if (outcome === "draw") return "Draw";
@@ -62,14 +96,58 @@ function outcomeLabel(outcome) {
   return outcome;
 }
 
-function ConditionBoard({ report, error }) {
-  const days = report?.days ?? [];
+function isGoalEvent(event) {
+  const type = (event?.type || "").toLowerCase();
+  if (!type.includes("goal")) return false;
+  return !type.includes("disallow") && !type.includes("cancel") && !type.includes("miss");
+}
+
+function ResultColumns({ goals, outcome, detail }) {
+  return (
+    <div className="result-cols">
+      <div>
+        <strong>{goals}</strong>
+        <span>Goals</span>
+        {detail && <p className="goal-minutes">{detail}</p>}
+      </div>
+      <div>
+        <strong className={outcome}>{outcomeLabel(outcome)}</strong>
+        <span>Result</span>
+      </div>
+    </div>
+  );
+}
+
+function EventColumn({ title, events, empty, goals = false }) {
+  return (
+    <section>
+      <p className="col-title">{title}</p>
+      {events.length === 0 ? (
+        <p className="detail-note">{empty}</p>
+      ) : (
+        <ul className={goals ? "events goals" : "events"}>
+          {events.map((event, index) => (
+            <li key={`${event.minute}-${event.type}-${index}`}>
+              <span className={`side ${event.side}`} />
+              <strong>{event.minute ? `${event.minute}'` : ""}</strong>
+              <span>{event.type}</span>
+              <span>{event.text}</span>
+              {event.score && <em>{event.score}</em>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ConditionBoard({ days, error, selectedDate, onSelectDate }) {
 
   return (
     <section className="condition">
       <div className="condition-head">
         <h2>30' to half-time</h2>
-        <p>0 goals win, 1 goal draw, more than 1 goal lose. Counted when the match finishes.</p>
+        <p>Click a day to see that day’s games. 0 goals win, 1 goal draw, more than 1 goal lose.</p>
       </div>
       {error && <p className="detail-note">{error}</p>}
       {!error && days.length === 0 && <p className="detail-note">No finished matches recorded yet.</p>}
@@ -85,7 +163,20 @@ function ConditionBoard({ report, error }) {
           </thead>
           <tbody>
             {days.map((day) => (
-              <tr key={day.date}>
+              <tr
+                key={day.date}
+                className={selectedDate === day.date ? "day-selected" : ""}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selectedDate === day.date}
+                onClick={() => onSelectDate(day.date)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectDate(day.date);
+                  }
+                }}
+              >
                 <td>{formatDay(day.date)}</td>
                 <td className="win">{day.wins}</td>
                 <td className="lose">{day.losses}</td>
@@ -99,161 +190,153 @@ function ConditionBoard({ report, error }) {
   );
 }
 
-function MatchCard({ match, condition }) {
+function MatchCard({ match, condition, selected, onSelect }) {
   const group = bucket(match.status);
-  const [open, setOpen] = useState(group === "live");
   const hasScore = match.homeScore != null && match.awayScore != null;
 
   return (
-    <li className={group === "live" ? "card live-card" : "card"}>
-      <div className="meta">
-        <span className={`badge ${group}`}>{match.statusText}</span>
-        <span className="competition">
-          <Crest src={match.competitionLogo} />
-          {match.competition}
-        </span>
-        <time dateTime={match.kickoff || undefined}>{formatKickoff(match.kickoff)}</time>
-      </div>
-      <div className="teams">
-        <div className="team">
-          <Crest src={match.homeLogo} />
-          <span className="name">{match.home}</span>
-        </div>
-        <div className="score">{hasScore ? `${match.homeScore} – ${match.awayScore}` : "vs"}</div>
-        <div className="team away">
-          <Crest src={match.awayLogo} />
-          <span className="name">{match.away}</span>
-        </div>
-      </div>
-      {condition && (
-        <p className="condition-result">
-          <span className={`condition-pill ${condition.outcome}`}>
-            {condition.goals === 1 ? "1 goal" : `${condition.goals} goals`} · {outcomeLabel(condition.outcome)}
+    <li className={`card${group === "live" ? " live-card" : ""}${selected ? " selected" : ""}`}>
+      <button
+        className="card-select"
+        type="button"
+        aria-pressed={selected}
+        onClick={() => onSelect(match)}
+      >
+        <div className="meta">
+          <span className={`badge ${group}`}>{match.statusText}</span>
+          <span className="competition">
+            <Crest src={match.competitionLogo} />
+            {match.competition}
           </span>
-        </p>
-      )}
-      {match.slug && (
-        <button className="details-toggle" type="button" onClick={() => setOpen((value) => !value)}>
-          {open ? "Hide detail" : "Match detail"}
-        </button>
-      )}
-      {open && match.slug && <MatchDetails slug={match.slug} />}
+          <time dateTime={match.kickoff || undefined}>{formatKickoff(match.kickoff)}</time>
+        </div>
+        <div className="teams">
+          <div className="team">
+            <Crest src={match.homeLogo} />
+            <span className="name">{match.home}</span>
+          </div>
+          <div className="score">{hasScore ? `${match.homeScore} – ${match.awayScore}` : "vs"}</div>
+          <div className="team away">
+            <Crest src={match.awayLogo} />
+            <span className="name">{match.away}</span>
+          </div>
+        </div>
+        {condition && <ResultColumns goals={condition.goals} outcome={condition.outcome} />}
+      </button>
     </li>
   );
 }
 
-function MatchDetails({ slug }) {
+function MatchStatus({ match, condition, onClose }) {
+  const { detail, error } = useMatchDetail(match.slug);
+  const group = bucket(detail?.status || match.status);
+  const homeScore = detail?.homeScore ?? match.homeScore;
+  const awayScore = detail?.awayScore ?? match.awayScore;
+  const hasScore = homeScore != null && homeScore !== "" && awayScore != null && awayScore !== "";
+  const statusText = detail?.statusText || match.statusText;
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [match.slug]);
+
+  return (
+    <section className="status-panel" ref={panelRef} aria-live="polite">
+      <div className="status-main">
+        <div className="status-top">
+          <span className={`badge ${group}`}>{statusText}</span>
+          {detail?.minute && <strong className="minute">{detail.minute}'</strong>}
+          <span className="competition">
+            <Crest src={match.competitionLogo} />
+            {match.competition}
+          </span>
+          <button className="status-close" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className="teams status-score">
+          <div className="team">
+            <Crest src={match.homeLogo} />
+            <span className="name">{match.home}</span>
+          </div>
+          <div className="score">{hasScore ? `${homeScore} – ${awayScore}` : "vs"}</div>
+          <div className="team away">
+            <Crest src={match.awayLogo} />
+            <span className="name">{match.away}</span>
+          </div>
+        </div>
+        <div className="status-notes">
+          {detail?.halfTime && <p className="detail-note">Half-time {detail.halfTime}</p>}
+          {!detail && <p className="detail-note">{error || "Loading status…"}</p>}
+          {condition && <ResultColumns goals={condition.goals} outcome={condition.outcome} />}
+        </div>
+      </div>
+      <div className="status-side">
+        {detail?.stats?.length > 0 && (
+          <ul className="stats">
+            {detail.stats.map((stat) => (
+              <li key={stat.label} className="stat">
+                <span>{stat.home}{stat.suffix}</span>
+                <span className="track home" aria-hidden="true">
+                  <span style={{ width: `${stat.homePct ?? 0}%` }} />
+                </span>
+                <span className="stat-label">{stat.label}</span>
+                <span className="track away" aria-hidden="true">
+                  <span style={{ width: `${stat.awayPct ?? 0}%` }} />
+                </span>
+                <span>{stat.away}{stat.suffix}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {detail && (
+          <div className="event-cols">
+            <EventColumn title="Goals" events={detail.events.filter(isGoalEvent)} empty="No goals" goals />
+            <EventColumn title="Match" events={detail.events.filter((event) => !isGoalEvent(event))} empty="No other events" />
+          </div>
+        )}
+        {detail && detail.stats.length === 0 && detail.events.length === 0 && (
+          <p className="detail-note">No live stats for this match yet.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function useMatchDetail(slug) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     let timer = 0;
+    setDetail(null);
+    setError("");
 
     async function load() {
       try {
         const response = await fetch(`/api/match/${slug}`);
-        if (!response.ok) throw new Error("Details are unavailable");
+        if (!response.ok) throw new Error("Status is unavailable");
         const data = await response.json();
         if (!cancelled) {
           setDetail(data);
           setError("");
         }
       } catch (err) {
-        if (!cancelled) setError(err.message || "Details are unavailable");
+        if (!cancelled) setError(err.message || "Status is unavailable");
       }
 
       if (!cancelled) timer = window.setTimeout(load, 20_000);
     }
 
-    load();
+    if (slug) load();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
   }, [slug]);
 
-  if (error && !detail) return <p className="detail-note">{error}</p>;
-  if (!detail) return <p className="detail-note">Loading match detail…</p>;
-
-  return (
-    <div className="detail">
-      {detail.minute && <p className="minute">{detail.minute}'</p>}
-      {detail.halfTime && <p className="detail-note">Half-time {detail.halfTime}</p>}
-
-      {detail.stats.length > 0 && (
-        <ul className="stats">
-          {detail.stats.map((stat) => (
-            <li key={stat.label} className="stat">
-              <span>{stat.home}{stat.suffix}</span>
-              <span className="track home" aria-hidden="true">
-                <span style={{ width: `${stat.homePct ?? 0}%` }} />
-              </span>
-              <span className="stat-label">{stat.label}</span>
-              <span className="track away" aria-hidden="true">
-                <span style={{ width: `${stat.awayPct ?? 0}%` }} />
-              </span>
-              <span>{stat.away}{stat.suffix}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {detail.events.length > 0 && (
-        <ul className="events">
-          {detail.events.map((event, index) => (
-            <li key={`${event.minute}-${event.type}-${index}`}>
-              <span className={`side ${event.side}`} />
-              <strong>{event.minute ? `${event.minute}'` : ""}</strong>
-              <span>{event.type}</span>
-              <span>{event.text}</span>
-              {event.score && <em>{event.score}</em>}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {detail.lineup && (
-        <div className="lineups">
-          <PlayerList
-            title="Home"
-            formation={detail.lineup.homeFormation}
-            players={detail.lineup.homeXi}
-            bench={detail.lineup.homeBench}
-          />
-          <PlayerList
-            title="Away"
-            formation={detail.lineup.awayFormation}
-            players={detail.lineup.awayXi}
-            bench={detail.lineup.awayBench}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PlayerList({ title, formation, players, bench }) {
-  return (
-    <div>
-      <p className="xi-title">
-        {title}
-        {formation ? ` · ${formation}` : ""}
-      </p>
-      <ul className="xi">
-        {players.map((player) => (
-          <li key={`${player.number}-${player.name}`}>
-            <span>{player.number ?? "–"}</span>
-            {player.name}
-            {player.captain ? " (c)" : ""}
-          </li>
-        ))}
-      </ul>
-      {bench.length > 0 && (
-        <p className="bench">Bench: {bench.map((player) => player.name).join(", ")}</p>
-      )}
-    </div>
-  );
+  return { detail, error };
 }
 
 function Board() {
@@ -266,6 +349,12 @@ function Board() {
   const [sending, setSending] = useState(false);
   const [conditions, setConditions] = useState(null);
   const [conditionError, setConditionError] = useState("");
+  const [selectedSlug, setSelectedSlug] = useState(null);
+  const [day, setDay] = useState(null);
+  const [dayGames, setDayGames] = useState(null);
+  const [dayError, setDayError] = useState("");
+  const [sort, setSort] = useState("league");
+  const [layout, setLayout] = useState("cards");
 
   async function sendToTelegram() {
     setSending(true);
@@ -349,6 +438,38 @@ function Board() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!day) {
+      setDayGames(null);
+      setDayError("");
+      return undefined;
+    }
+
+    let cancelled = false;
+    setDayGames(null);
+    setDayError("");
+
+    async function load() {
+      try {
+        const params = new URLSearchParams({ date: day, from: "30" });
+        const response = await fetch(`/api/range?${params}`);
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "Could not load this day");
+        if (!cancelled) {
+          setDayGames(body.matches ?? []);
+          setDayError("");
+        }
+      } catch (err) {
+        if (!cancelled) setDayError(err.message || "Could not load this day");
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [day]);
+
   const conditionBySlug = useMemo(() => {
     const map = new Map();
     for (const item of conditions?.matches ?? []) map.set(item.slug, item);
@@ -356,18 +477,35 @@ function Board() {
   }, [conditions]);
 
   const matches = feed?.matches ?? [];
-  const inLeague = league === "all" ? matches : matches.filter((match) => match.leagueId === league);
+  const listedDays = useMemo(() => {
+    const stored = conditions?.days ?? [];
+    const today = playedOn(new Date().toISOString());
+    if (!today || stored.some((item) => item.date === today)) return stored;
+    if (!matches.some((match) => playedOn(match.kickoff) === today)) return stored;
+    return [{ date: today, wins: 0, losses: 0, draws: 0 }, ...stored];
+  }, [conditions, matches]);
+  const boardMatches = useMemo(() => {
+    if (!day) return matches;
+    const bySlug = new Map();
+    for (const match of (dayGames ?? []).map(storedCard)) bySlug.set(match.slug, match);
+    for (const match of matches) {
+      if (playedOn(match.kickoff) === day) bySlug.set(match.slug, match);
+    }
+    return [...bySlug.values()];
+  }, [day, dayGames, matches]);
+  const scope = day ? boardMatches : matches;
+  const inLeague = league === "all" ? scope : scope.filter((match) => match.leagueId === league);
 
   const leagueCounts = useMemo(() => {
-    const tally = { all: matches.length };
+    const tally = { all: scope.length };
     for (const item of LEAGUES) {
       if (item.id !== "all") tally[item.id] = 0;
     }
-    for (const match of matches) {
+    for (const match of scope) {
       if (match.leagueId in tally) tally[match.leagueId] += 1;
     }
     return tally;
-  }, [matches]);
+  }, [scope]);
 
   const counts = useMemo(() => {
     const tally = { all: inLeague.length, live: 0, upcoming: 0, finished: 0 };
@@ -380,23 +518,75 @@ function Board() {
 
   const visible = useMemo(() => {
     const list = filter === "all" ? inLeague : inLeague.filter((match) => bucket(match.status) === filter);
-    const order = { live: 0, upcoming: 1, finished: 2 };
-    return [...list].sort((a, b) => {
-      const statusCompare = (order[bucket(a.status)] ?? 9) - (order[bucket(b.status)] ?? 9);
-      if (statusCompare !== 0) return statusCompare;
-      return new Date(a.kickoff || 0) - new Date(b.kickoff || 0);
-    });
+    return [...list].sort((a, b) => new Date(a.kickoff || 0) - new Date(b.kickoff || 0));
   }, [inLeague, filter]);
 
+  const grouped = useMemo(() => {
+    if (sort === "time") return [{ id: "time", label: "", matches: visible }];
+    const buckets = new Map();
+    for (const match of visible) {
+      const id = match.leagueId || "other";
+      if (!buckets.has(id)) buckets.set(id, []);
+      buckets.get(id).push(match);
+    }
+    const sections = [];
+    for (const item of LEAGUES) {
+      if (item.id === "all") continue;
+      const list = buckets.get(item.id);
+      if (list?.length) sections.push({ id: item.id, label: item.label, matches: list });
+      buckets.delete(item.id);
+    }
+    for (const [id, list] of buckets) {
+      sections.push({ id, label: list[0]?.competition || "Other", matches: list });
+    }
+    return sections;
+  }, [visible, sort]);
+
+  const selected = scope.find((match) => match.slug === selectedSlug) ?? null;
+
+  function selectDay(date) {
+    setDay((current) => (current === date ? null : date));
+    setFilter("all");
+    setLeague("all");
+  }
+
   return (
-    <>
-      <header className="top">
-        <div>
-          <p className="eyebrow">Football</p>
-          <h1>Match board</h1>
-          <p className="lede">Premier League, Serie A, Bundesliga, and La Liga.</p>
+    <div className="desk">
+      <aside className="rail">
+        <div className="kpis">
+          <div>
+            <strong className="live-count">{counts.live ?? 0}</strong>
+            <span>Live</span>
+          </div>
+          <div>
+            <strong>{counts.upcoming ?? 0}</strong>
+            <span>Upcoming</span>
+          </div>
+          <div>
+            <strong>{counts.finished ?? 0}</strong>
+            <span>Finished</span>
+          </div>
         </div>
-        <div className="actions">
+        <ConditionBoard
+          days={listedDays}
+          error={conditionError}
+          selectedDate={day}
+          onSelectDate={selectDay}
+        />
+        <div className="filters rail-filters">
+          {FILTERS.map((item) => (
+            <button
+              key={item.id}
+              className={filter === item.id ? "chip active" : "chip"}
+              onClick={() => setFilter(item.id)}
+              type="button"
+            >
+              {item.label}
+              <span>{counts[item.id] ?? 0}</span>
+            </button>
+          ))}
+        </div>
+        <div className="rail-foot">
           <p className="updated">
             {feed?.updated
               ? `Updated ${new Date(feed.updated).toLocaleTimeString()}`
@@ -409,54 +599,94 @@ function Board() {
           </button>
           {telegramNote && <p className="telegram-note">{telegramNote}</p>}
         </div>
-      </header>
+      </aside>
 
-      <ConditionBoard report={conditions} error={conditionError} />
+      <section className="pitch">
+        <header className="pitch-head">
+          <div>
+            <p className="eyebrow">{day ? "Games that day" : "Match board"}</p>
+            <h1>{day ? formatDay(day) : "Match desk"}</h1>
+            {day && (
+              <button className="day-clear" type="button" onClick={() => setDay(null)}>
+                All days
+              </button>
+            )}
+            <div className="sorts">
+              <button className={sort === "league" ? "chip active" : "chip"} type="button" onClick={() => setSort("league")}>
+                By league
+              </button>
+              <button className={sort === "time" ? "chip active" : "chip"} type="button" onClick={() => setSort("time")}>
+                By time
+              </button>
+              <button className={layout === "cards" ? "chip active" : "chip"} type="button" onClick={() => setLayout("cards")}>
+                Cards
+              </button>
+              <button className={layout === "rows" ? "chip active" : "chip"} type="button" onClick={() => setLayout("rows")}>
+                One per row
+              </button>
+            </div>
+          </div>
+          <div className="filters">
+            {LEAGUES.map((item) => (
+              <button
+                key={item.id}
+                className={league === item.id ? "chip active" : "chip"}
+                onClick={() => setLeague(item.id)}
+                type="button"
+              >
+                {item.label}
+                <span>{leagueCounts[item.id] ?? 0}</span>
+              </button>
+            ))}
+          </div>
+        </header>
 
-      <div className="filters">
-        {LEAGUES.map((item) => (
-          <button
-            key={item.id}
-            className={league === item.id ? "chip active" : "chip"}
-            onClick={() => setLeague(item.id)}
-            type="button"
-          >
-            {item.label}
-            <span>{leagueCounts[item.id] ?? 0}</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="filters">
-        {FILTERS.map((item) => (
-          <button
-            key={item.id}
-            className={filter === item.id ? "chip active" : "chip"}
-            onClick={() => setFilter(item.id)}
-            type="button"
-          >
-            {item.label}
-            <span>{counts[item.id] ?? 0}</span>
-          </button>
-        ))}
-      </div>
-
-      {error && <p className="banner">{error}. The .NET API should be running on port 5095.</p>}
-
-      {!error && !loading && visible.length === 0 && (
-        <p className="empty">No matches in this view right now.</p>
-      )}
-
-      <ul className="list">
-        {visible.map((match) => (
-          <MatchCard
-            key={match.slug || `${match.competition}-${match.home}-${match.away}-${match.kickoff}`}
-            match={match}
-            condition={match.slug ? conditionBySlug.get(match.slug) : null}
+        {selected && (
+          <MatchStatus
+            key={selected.slug}
+            match={selected}
+            condition={selected.slug ? conditionBySlug.get(selected.slug) : null}
+            onClose={() => setSelectedSlug(null)}
           />
+        )}
+
+        {(error || dayError) && (
+          <p className="banner">
+            {error ? `${error}. The .NET API should be running on port 5095.` : dayError}
+          </p>
+        )}
+
+        {day && dayGames === null && !dayError && <p className="empty">Loading this day…</p>}
+
+        {!error && !dayError && !(day && dayGames === null) && !loading && visible.length === 0 && (
+          <p className="empty">{day ? `No matches on ${formatDay(day)}.` : "No matches in this view right now."}</p>
+        )}
+
+        {grouped.map((section) => (
+          <section key={section.id} className="league-block">
+            {section.label && (
+              <h2 className="league-title">
+                {section.label}
+                <span>{section.matches.length}</span>
+              </h2>
+            )}
+            <ul className={layout === "rows" ? "list rows" : "list"}>
+              {section.matches.map((match) => (
+                <MatchCard
+                  key={match.slug || `${match.competition}-${match.home}-${match.away}-${match.kickoff}`}
+                  match={match}
+                  condition={match.slug ? conditionBySlug.get(match.slug) : null}
+                  selected={Boolean(match.slug) && match.slug === selectedSlug}
+                  onSelect={(item) =>
+                    setSelectedSlug((current) => (current === item.slug ? null : item.slug))
+                  }
+                />
+              ))}
+            </ul>
+          </section>
         ))}
-      </ul>
-    </>
+      </section>
+    </div>
   );
 }
 
@@ -536,10 +766,6 @@ function useDays() {
   return { days, error };
 }
 
-function goalText(goals) {
-  return goals === 1 ? "1 goal" : `${goals} goals`;
-}
-
 function minuteText(minute) {
   const name = minute.player ? ` ${minute.player}` : "";
   return `${minute.label}'${name}`;
@@ -582,9 +808,6 @@ function GameRows({ matches }) {
         <li key={match.slug} className="card">
           <div className="meta">
             <span className="competition">{match.league}</span>
-            <span className={`condition-pill ${match.outcome}`}>
-              {goalText(match.goals)} · {outcomeLabel(match.outcome)}
-            </span>
           </div>
           <div className="teams">
             <div className="team">
@@ -597,7 +820,7 @@ function GameRows({ matches }) {
               <span className="name">{match.away}</span>
             </div>
           </div>
-          <p className="goal-minutes">{minuteLine(match)}</p>
+          <ResultColumns goals={match.goals} outcome={match.outcome} detail={minuteLine(match)} />
         </li>
       ))}
     </ul>
@@ -760,12 +983,18 @@ export default function App() {
   const page = path === "/range" ? <RangePage /> : path === "/games" ? <GamesPage /> : <Board />;
 
   return (
-    <div className="page">
-      <SiteNav path={path} go={go} />
-      {page}
-      <footer>
-        Powered by <a href="https://sportscore.com/">SportScore</a>
-      </footer>
+    <div className="shell">
+      <header className="topbar">
+        <div className="brand">
+          <p className="eyebrow">Football</p>
+          <strong>Live desk</strong>
+        </div>
+        <SiteNav path={path} go={go} />
+        <p className="credit">
+          Powered by <a href="https://sportscore.com/">SportScore</a>
+        </p>
+      </header>
+      <main className="stage">{page}</main>
     </div>
   );
 }
