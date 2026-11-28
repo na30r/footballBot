@@ -7,6 +7,7 @@ const LEAGUES = [
   { id: "serie-a", label: "Serie A" },
   { id: "bundesliga", label: "Bundesliga" },
   { id: "la-liga", label: "La Liga" },
+  { id: "iran-pro-league", label: "Iran Pro League" },
   { id: "champions-league", label: "Champions League" },
   { id: "europa-league", label: "Europa League" },
   { id: "afc-champions-league", label: "AFC Champions League Elite" },

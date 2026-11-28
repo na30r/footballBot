@@ -226,9 +226,10 @@ static async Task<MatchFeed?> LoadMatchFeed(
 
     var client = httpFactory.CreateClient("sportscore");
     var today = DateTime.UtcNow.Date;
+    using var gate = new SemaphoreSlim(6);
     var requests = TopLeagues.All.SelectMany(league =>
         Enumerable.Range(-1, 5).Select(offset =>
-            FetchLeagueDay(client, league, today.AddDays(offset), cancellationToken)));
+            FetchLeagueDay(client, gate, league, today.AddDays(offset), cancellationToken)));
 
     var results = await Task.WhenAll(requests);
     if (results.All(result => !result.Ok))
@@ -537,6 +538,7 @@ static string Html(string? value) => (value ?? "")
 
 static async Task<LeagueDay> FetchLeagueDay(
     HttpClient client,
+    SemaphoreSlim gate,
     LeagueSource league,
     DateTime date,
     CancellationToken cancellationToken)
@@ -544,13 +546,32 @@ static async Task<LeagueDay> FetchLeagueDay(
     var url =
         $"api/v1/fixtures/?sport=football&competition={league.Slug}&date={date:yyyy-MM-dd}&limit=20&src=local-football-board";
 
-    using var response = await client.GetAsync(url, cancellationToken);
-    if (!response.IsSuccessStatusCode)
-        return new LeagueDay(false, []);
+    await gate.WaitAsync(cancellationToken);
+    try
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            using var response = await client.GetAsync(url, cancellationToken);
+            if ((int)response.StatusCode == 429 && attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(600 * (attempt + 1)), cancellationToken);
+                continue;
+            }
 
-    var payload = await response.Content.ReadFromJsonAsync<UpstreamFeed>(cancellationToken);
-    var matches = payload?.Matches.Select(match => MapMatch(match, league)).ToArray() ?? [];
-    return new LeagueDay(true, matches);
+            if (!response.IsSuccessStatusCode)
+                return new LeagueDay(false, []);
+
+            var payload = await response.Content.ReadFromJsonAsync<UpstreamFeed>(cancellationToken);
+            var matches = payload?.Matches.Select(match => MapMatch(match, league)).ToArray() ?? [];
+            return new LeagueDay(true, matches);
+        }
+
+        return new LeagueDay(false, []);
+    }
+    finally
+    {
+        gate.Release();
+    }
 }
 
 static int LeagueRank(string leagueId)
@@ -696,6 +717,7 @@ static class TopLeagues
         new("serie-a", "Serie A", "italian-serie-a"),
         new("bundesliga", "Bundesliga", "bundesliga"),
         new("la-liga", "La Liga", "spanish-la-liga"),
+        new("iran-pro-league", "Iran Pro League", "iran-pro-league"),
         new("champions-league", "Champions League", "uefa-champions-league"),
         new("europa-league", "Europa League", "uefa-europa-league"),
         new("afc-champions-league", "AFC Champions League Elite", "afc-champions-league-elite"),
